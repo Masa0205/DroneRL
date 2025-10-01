@@ -37,7 +37,7 @@ class arUco:
         corners, ids, rejected = cv2.aruco.detectMarkers(
             gray, self.dictionary, parameters=self.parameters
         )
-
+        area = None
         centers = []
         output_img = image.copy()
 
@@ -56,9 +56,9 @@ class arUco:
         #print(centers)
         return centers, area, output_img
     
-    def get_state(obs, a=np.array([0.0, 0.0], dtype=np.float32)):
+    def get_state(self, obs, a=np.array([0.0, 0.0], dtype=np.float32)):
         agent_pos = np.array(obs,dtype=np.float32)
-        target_pos = np.array([480, 360],dtypepe=np.float32)
+        target_pos = np.array([480, 360],dtype=np.float32)
 
         s_x, s_y = target_pos - agent_pos
         s_x, s_y = s_x/960, s_y/720
