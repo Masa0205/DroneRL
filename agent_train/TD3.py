@@ -203,9 +203,9 @@ class TD3(object):
         
 
     def load(self, actor_path, critic_path):
-        self.actor.load_state_dict(torch.load(actor_path))
+        self.actor.load_state_dict(torch.load(actor_path, weights_only=True, map_location=torch.device(self.device)))
         self.target_actor.load_state_dict(self.actor.state_dict())
-        self.critic.load_state_dict(torch.load(critic_path))
+        self.critic.load_state_dict(torch.load(critic_path, weights_only=True, map_location=torch.device(self.device)))
         self.target_critic.load_state_dict(self.critic.state_dict())
         
 
