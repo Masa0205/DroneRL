@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import torch
 from collections import deque
+import copy
 class arUco:
     def __init__(self, dictionary=cv2.aruco.DICT_4X4_50):
         """
@@ -55,9 +56,9 @@ class arUco:
         #print(centers)
         return centers, area, output_img
     
-    def get_state(obs, a):
-        agent_pos = np.array(obs,astpe=np.float32)
-        target_pos = np.array([480, 360],astpe=np.float32)
+    def get_state(obs, a=np.array([0.0, 0.0], dtype=np.float32)):
+        agent_pos = np.array(obs,dtype=np.float32)
+        target_pos = np.array([480, 360],dtypepe=np.float32)
 
         s_x, s_y = target_pos - agent_pos
         s_x, s_y = s_x/960, s_y/720

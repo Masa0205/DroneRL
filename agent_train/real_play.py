@@ -1,15 +1,15 @@
 from djitellopy import Tello 
 import time
-import cv2 
+import cv2   
 import threading
 from collections import deque
 import queue
-import pickle
-
+import numpy as np
 from aruco import arUco
 from TD3 import TD3
 
-def image_thread(image_queue, action_queue):
+def image_thread(image_queue):
+    scale = 10
     while True:
         try:
             # tellloから最新の画像を非同期で取得
@@ -27,85 +27,49 @@ def image_thread(image_queue, action_queue):
             #print("success")
 
             #状態取得
-            a = [0.0, 0.0]
-            centers, are, output_img = aruco.detect(stream_bgr)
+            norm_a = np.array([0.0, 0.0], dtype=np.float32)
+            centers, area, output_img = aruco.detect(stream_bgr)
+            print("area=",area)
+            x, y = centers
+            MARGIN = 50
             if len(centers) > 0:
-                s = aruco.get_state(centers, a)
-                a = agent.action(s)
+                if (480 - MARGIN) < x < (480+MARGIN) and (360-MARGIN) < y < (360+MARGIN):
+                    a = norm_a
+                    print("Done")
+                else:
+                    s = aruco.get_state(centers, a)
+                    a = agent.action(s)
+                    print("Tracking")
             else:
-                a = [0.0, 0.0]
-            
-            # キューが満杯なら一番古い画像を破棄
-            if action_queue.full():
-                action_queue.get()
-            # 最新の画像をキューに追加
-            action_queue.put(a)
-
-            
-            
-
-
-
-
+                a = norm_a
+                print("Nodetect")
+            yaw, z = a
+            yaw = - scale * yaw
+            z = scale * z
+            print(f"yaw={yaw}, z={z}")
+            #me.send_rc_control(0, 0, z, yaw)
             # 取得間隔を調整（例: 0.03秒 = 約33fps）
             time.sleep(1/30)
         except Exception as e:
-            print("getImageError", e)
+            print("Error:", e)
             
         
-def flight(image_queue):
-    dis = 80
-    vel = 100
-    duration = dis / vel
-    me.send_rc_control(0, 0, 0, 0)
-    time.sleep(3)
-    print("start")
-    while True:
-        
-        local_images = clip(image_queue, [])
-        check, centers = marker_check(local_images)
-        #print(check, centers)
-        
-        if check:
-            s = W.preprocess(local_images)
-            a = agent.action(s, 0)
-            if a == 0:
-                me.send_rc_control(0, 0, 0, 0)
-                #print("a=",a)
-            elif a == 1:
-                me.send_rc_control(-vel, 0, 0, 0)
-                #print("a=",a)
-            elif a == 2:
-                me.send_rc_control(vel, 0, 0, 0)
-                #print("a=",a)
-            
-        else:
-            me.send_rc_control(0, 0, 0, 0)
-            #print("noDetect")
-        
-        time.sleep(duration)
-        
-
-
 def main():
     print(me.get_battery())
-    image_queue = queue.Queue(maxsize=4) # 4フレームを保持
-    action_queue = queue.Queue(maxsize=1)
-    local_images = []
-    thread_1 = threading.Thread(target=image_thread, args=(image_queue,view_queue,))
-    thread_1.daemon = True # メインスレッド終了時にスレッドも終了
-    thread_1.start()
-    me.takeoff()
-    thread_2 = threading.Thread(target=flight, args=(image_queue,))
-    thread_2.daemon = True
-    thread_2.start()
+    image_queue = queue.Queue(maxsize=1) # 4フレームを保持
+    thread = threading.Thread(target=image_thread, args=(image_queue,))
+    thread.daemon = True # メインスレッド終了時にスレッドも終了
+    thread.start()
+    #me.takeoff()
     while True:
-        if not view_queue.empty():
-            frame = view_queue.get()
+        if not image_queue.empty():
+            frame = image_queue.get()
             cv2.imshow("Tello", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
-    me.land()
+
+
+    #me.land()
     me.streamoff()
     cv2.destroyAllWindows()
 if __name__ == "__main__":
