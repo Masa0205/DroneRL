@@ -6,7 +6,7 @@ import numpy as np
 import time
 import matplotlib.pyplot as plt
 from datetime import datetime
-from TD3 import Replay_buffer, Actor, Critic, TD3
+from TD3 import Replay_buffer, TD3
 
 def get_state(obs, a):
     agent_pos = np.array(obs["agent"])

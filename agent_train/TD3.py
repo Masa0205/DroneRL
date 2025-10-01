@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-class replay_buffer(object):
+class Replay_buffer(object):
     #N=バッファーサイズ, n=バッジサイズ
     def __init__(self, N, n):
         self.memory = deque(maxlen=N)
@@ -58,18 +58,31 @@ class Critic(nn.Module):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.device = device
-        self.seq = nn.Sequential(
+        self.seqc1 = nn.Sequential(
             nn.Linear(state_dim+action_dim, 128),
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU(),
             nn.Linear(128, 1),
         )
-        self.seq.apply(self.init_weights)
+
+        self.seqc2 = nn.Sequential(
+            nn.Linear(state_dim+action_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
+        )
+        self.seqc1.apply(self.init_weights)
+        self.seqc2.apply(self.init_weights)
     
     def forward(self, s, a):
         x = torch.cat([s, a], dim=-1)
-        return self.seq(x)
+        return self.seqc1(x), self.seqc2(x)
+    
+    def Q1(self, s, a):
+        x = torch.cat([s, a], dim=-1)
+        return self.seqc1(x)
     
     @staticmethod
     def init_weights(m):
@@ -79,15 +92,15 @@ class Critic(nn.Module):
 class TD3(object):
     def __init__(self):
         self.gamma = 0.99
-        self.lr = 1e-3
+        self.lr = 3e-4
         self.action_dim = 2
         self.state_dim = 4
         self.action_max = 1.0
-        self.policy_noise = 0.2
+        self.policy_noise = 0.1
         self.noise_clip = 0.5
         self.policy_freq = 2
         self.t = 0
-        self.tau = 0.005
+        self.tau = 0.01
         self.device = "cpu"
         if torch.cuda.is_available():
             self.device = "cuda"
@@ -98,14 +111,13 @@ class TD3(object):
         self.actor = Actor(self.state_dim, self.action_dim, self.action_max, self.device).to(self.device)
         self.target_actor = Actor(self.state_dim, self.action_dim, self.action_max, self.device).to(self.device)
         self.optim_actor = optim.Adam(self.actor.parameters(), lr=self.lr)
-        #CriticNetwork-1
-        self.c1 = Critic(self.state_dim, self.action_dim, self.device).to(self.device)
-        self.target_c1 = Critic(self.state_dim, self.action_dim, self.device).to(self.device)
-        self.optim_c1 = optim.Adam(self.c1.parameters(), lr=self.lr)
-        #CriticNetwork-2
-        self.c2 = Critic(self.state_dim, self.action_dim, self.device).to(self.device)
-        self.target_c2 = Critic(self.state_dim, self.action_dim, self.device).to(self.device)
-        self.optim_c2 = optim.Adam(self.c2.parameters(), lr=self.lr)
+        #CriticNetwork
+        self.critic = Critic(self.state_dim, self.action_dim, self.device).to(self.device)
+        self.target_critic = Critic(self.state_dim, self.action_dim, self.device).to(self.device)
+        self.optim_critic = optim.Adam(self.critic.parameters(), lr=self.lr)
+
+        self.target_actor.load_state_dict(self.actor.state_dict())
+        self.target_critic.load_state_dict(self.critic.state_dict())
 
     
     def action(self, s, noise=0.0):
@@ -113,21 +125,24 @@ class TD3(object):
         a = self.actor(s)
         a = a.detach().cpu().numpy()  # Tensor → numpy
         if noise > 0.0:
+            #print("noiseOn")
             a += np.random.normal(0, noise*self.action_max,
                                        size=self.action_dim)
-            action = np.clip(a, -self.action_max, self.action_max)
+        action = np.clip(a, -self.action_max, self.action_max)
         #actionはnumpy配列になる[v(yaw), v(z)]
         return action
     
     def train(self, memory):
         self.t += 1
-        s, a, r, s_prime, done = memory.sample()
+        batch = memory.sample()
+        s, a, r, s_prime, done = zip(*batch)
+
          # Tensor化 & GPU転送
-        s = torch.FloatTensor(s).to(self.device)
-        a = torch.FloatTensor(a).to(self.device)
-        r = torch.FloatTensor(r).unsqueeze(-1).to(self.device)
-        s_prime = torch.FloatTensor(s_prime).to(self.device)
-        done = torch.FloatTensor(done).unsqueeze(-1).to(self.device)
+        s = torch.FloatTensor(np.array(s)).to(self.device)
+        a = torch.FloatTensor(np.array(a)).to(self.device)
+        r = torch.FloatTensor(np.array(r)).unsqueeze(-1).to(self.device)
+        s_prime = torch.FloatTensor(np.array(s_prime)).to(self.device)
+        done = torch.FloatTensor(np.array(done)).unsqueeze(-1).to(self.device)
 
         with torch.no_grad():
             noise = (
@@ -140,38 +155,34 @@ class TD3(object):
             ).clamp(-self.action_max, self.action_max)
 
             #Q値取得
-            target_q1 = self.target_c1(s_prime, a_prime)
-            target_q2 = self.target_c2(s_prime, a_prime)
+            target_q1, target_q2 = self.target_critic(s_prime, a_prime)
+            
             #小さい方を選ぶ
             target_Q = torch.min(target_q1, target_q2)
             target_Q = r + target_Q * self.gamma * (1 - done)
 
         #現在のQ値取得
-        q1 = self.c1(s, a)
-        q2 = self.c2(s, a)
+        q1, q2 = self.critic(s, a)
+       
 
         #Criticの損失計算
-        c1_loss = F.mse_loss(target_q1) + F.mse_loss(q1)
-        c2_loss = F.mse_loss(target_q2) + F.mse_loss(q2)
+        c_loss = F.mse_loss(q1, target_Q) + F.mse_loss(q2, target_Q)
 
         #Critic最適化
-        self.optim_c1.zero_grad()
-        c1_loss.backward()
-        self.optim_c1.step()
-        self.optim_c2.zero_grad()
-        c2_loss.backward()
-        self.optim_c2.step()
+        self.optim_critic.zero_grad()
+        c_loss.backward()
+        self.optim_critic.step()
+        
 
         #重みのコピーはソフト更新
-        for param, c1target_param in zip(self.c1.parameters(), self.target_c1.parameters()):
-            c1target_param.data.copy_(self.tau * param.data + (1 - self.tau) * c1target_param.data)
-        for param, c2target_param in zip(self.c2.parameters(), self.target_c2.parameters()):
-            c2target_param.data.copy_(self.tau * param.data + (1 - self.tau) * c2target_param.data)
+        for param, target_param in zip(self.critic.parameters(), self.target_critic.parameters()):
+            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+        
 
         #2回に1回Actorも最適化
         if self.t % self.policy_freq == 0:
             #オンラインNNから行動を出力し、Criticが評価（「-」はCriticは最大化、Actorは最小化を目指すから）
-            actor_loss = -self.c1(s, self.actor(s)).mean() #.mean()はバッチ平均
+            actor_loss = -self.critic.Q1(s, self.actor(s)).mean() #.mean()はバッチ平均
             
             #Actor最適化
             self.optim_actor.zero_grad()
@@ -187,17 +198,15 @@ class TD3(object):
     def save_param(self, k):
         torch.save(self.actor.state_dict(), f"actor_eps{k}.pth")
         torch.save(self.target_actor.state_dict(), f"actor_target_eps{k}.pth")
-        torch.save(self.c1.state_dict(), f"c1_eps{k}.pth")
-        torch.save(self.target_c1.state_dict(), f"c1_target_eps{k}.pth")
-        torch.save(self.c2.state_dict(), f"c2_eps{k}.pth")
-        torch.save(self.target_c2.state_dict(), f"c2_target_eps{k}.pth")
+        torch.save(self.critic.state_dict(), f"critic_eps{k}.pth")
+        torch.save(self.target_critic.state_dict(), f"critic_target_eps{k}.pth")
+        
 
-    def load(self, actor_path, c1_path, c2_path):
+    def load(self, actor_path, critic_path):
         self.actor.load_state_dict(torch.load(actor_path))
         self.target_actor.load_state_dict(self.actor.state_dict())
-        self.c1.load_state_dict(torch.load(c1_path))
-        self.target_c1.load_state_dict(self.c1.state_dict())
-        self.c2.load_state_dict(torch.load(c2_path))
-        self.target_c2.load_state_dict(self.c2.state_dict())
+        self.critic.load_state_dict(torch.load(critic_path))
+        self.target_critic.load_state_dict(self.critic.state_dict())
+        
 
         

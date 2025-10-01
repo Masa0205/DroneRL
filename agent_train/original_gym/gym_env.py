@@ -4,6 +4,7 @@ import gymnasium as gym
 from gymnasium import spaces
 import pygame
 from enum import Enum
+import copy
 class DroneEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
@@ -23,6 +24,7 @@ class DroneEnv(gym.Env):
         self.action_space = spaces.Box(low=np.array([-1.0,-1.0]), high=np.array([1.0, 1.0]), shape=(2,), dtype=np.float32)
         self.agent_location = np.array([-1.0, -1.0], dtype=np.float32)
         self.target_location = np.array([480, 360], dtype=np.float32)
+        self.prev_action = np.array([0.0, 0.0], dtype=np.float32)
 
         self.observation_space = gym.spaces.Dict(
             {
@@ -69,6 +71,7 @@ class DroneEnv(gym.Env):
     def step(self, action):
         terminated = False
         truncated = False
+        beta = 0.1
         reward = 0
         #送られてきたアクションから1フレームで何ピクセル動くかに変換
         scaled_action = action*self.MAX_SPEED_CM_S
@@ -81,23 +84,40 @@ class DroneEnv(gym.Env):
         x,y = self.agent_location
         if not (0 < x < self.width and 0 < y < self.height):
             terminated = True
-            reward -= 1
+            reward = -1
         elif (480 - self.MARGIN) < x < (480+self.MARGIN) and (360-self.MARGIN) < y < (360+self.MARGIN):
             terminated = True
-            reward += 10
+            reward = 100
         else:
+            #距離報酬
+            cx,cy = [480, 360]
+            dx, dy = cx - x, cy - y
+            distance = np.sqrt(dx**2 + dy**2)
+            d_max = np.sqrt((cx)**2 + (cy)**2)
+            # 正規化
+            norm_dist = distance / d_max
+            r_distance = 1 - norm_dist
+
+            #安全報酬
+            prev_x, prev_y = self.prev_action
+            current_x, current_y = action
+            sx, sy = current_x - prev_x, current_y - prev_y
+            dis = np.sqrt((sx)**2 + (sy)**2)
+            pena = beta * dis**2
+
+            #dis_max = np.sqrt((2.0)**2 + (2.0)**2)
+            #norm_dis = dis / dis_max
+            #r_move = 1 - norm_dis
+            #print(r_distance, pena)
+
+            #時間経過報酬
+            t_pena = 0.05
+
+            reward = r_distance - pena - t_pena
             if self.step_count == 50:
                 truncated = True
-                reward = -1
-            else:
-                cx,cy = [480, 360]
-                dx, dy = cx - x, cy - y
-                distance = np.sqrt(dx**2 + dy**2)
-                d_max = np.sqrt((cx)**2 + (cy)**2)
-                # 正規化
-                norm_dist = distance / d_max
-                reward = 1 - norm_dist
-        
+        #print("r=", reward)
+        self.prev_action = action.copy()
         observation = self.get_obs()
         info = self.get_info()
         if self.render_mode == "human":
